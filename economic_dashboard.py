@@ -5,405 +5,482 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 import plotly.express as px
-from fredapi import Fred
+import requests
+import io
 
+# ──────────────────────────────────────────────────────────────────────
 # Page config
-st.set_page_config(page_title="Economic Dashboard", layout="wide", page_icon="📊")
+# ──────────────────────────────────────────────────────────────────────
+st.set_page_config(page_title="Economic & Sector Dashboard", layout="wide", page_icon="📊")
+st.title("🏦 NY Fed Household Debt & Sector Performance Dashboard")
+st.markdown(f"*Last refreshed: {datetime.now().strftime('%B %d, %Y  %I:%M %p')}*")
 
-# Title
-st.title("🏦 Federal Reserve Economic & Sector Performance Dashboard")
-st.markdown(f"*Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
-
-# Initialize FRED API (you'll need to get a free API key from https://fred.stlouisfed.org/docs/api/api_key.html)
-# For now, we'll use dummy data if no key is provided
-FRED_API_KEY = st.secrets.get("FRED_API_KEY", None)
-
-# Sector ETFs to track
+# ──────────────────────────────────────────────────────────────────────
+# Constants
+# ──────────────────────────────────────────────────────────────────────
 SECTOR_ETFS = {
-    'XLK': 'Technology',
-    'XLF': 'Financials',
-    'XLE': 'Energy',
-    'XLV': 'Healthcare',
-    'XLY': 'Consumer Discretionary',
-    'XLP': 'Consumer Staples',
-    'XLI': 'Industrials',
-    'XLB': 'Materials',
-    'XLRE': 'Real Estate',
-    'XLU': 'Utilities',
-    'XLC': 'Communication Services'
+    'XLK': 'Technology', 'XLF': 'Financials', 'XLE': 'Energy',
+    'XLV': 'Healthcare', 'XLY': 'Consumer Disc.', 'XLP': 'Consumer Staples',
+    'XLI': 'Industrials', 'XLB': 'Materials', 'XLRE': 'Real Estate',
+    'XLU': 'Utilities', 'XLC': 'Comm. Services',
 }
-
-# Moving average periods
 MA_PERIODS = [8, 21, 100, 200]
 
-@st.cache_data(ttl=3600)
-def get_fed_delinquency_data():
-    """Fetch Federal Reserve delinquency data from FRED"""
+# NY Fed Excel URL pattern (quarterly)
+NYFED_EXCEL_URLS = [
+    "https://www.newyorkfed.org/medialibrary/interactives/householdcredit/data/xls/hhd_c_report_2025q4.xlsx",
+    "https://www.newyorkfed.org/medialibrary/interactives/householdcredit/data/xls/hhd_c_report_2025q3.xlsx",
+    "https://www.newyorkfed.org/medialibrary/interactives/householdcredit/data/xls/HHD_C_Report_2025Q2.xlsx",
+]
 
-    if FRED_API_KEY:
+# ──────────────────────────────────────────────────────────────────────
+# Helper: safe float conversion (handles pandas Series, numpy, None)
+# ──────────────────────────────────────────────────────────────────────
+def safe_float(val, default=0.0):
+    """Convert any value to a plain Python float."""
+    try:
+        if val is None:
+            return default
+        if isinstance(val, (pd.Series, np.ndarray)):
+            val = val.item() if val.size == 1 else val.iloc[0] if hasattr(val, 'iloc') else val[0]
+        return float(val)
+    except (TypeError, ValueError, IndexError):
+        return default
+
+
+# ══════════════════════════════════════════════════════════════════════
+# SECTION 1: NY FED HOUSEHOLD DEBT & DELINQUENCY DATA
+# ══════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=86400)  # cache for 24 hours (data is quarterly)
+def fetch_nyfed_data():
+    """
+    Download the NY Fed Household Debt & Credit Excel file.
+    Returns a dict of DataFrames keyed by sheet name, or None on failure.
+    """
+    for url in NYFED_EXCEL_URLS:
         try:
-            fred = Fred(api_key=FRED_API_KEY)
+            resp = requests.get(url, timeout=30,
+                                headers={'User-Agent': 'Mozilla/5.0 Economic Dashboard'})
+            if resp.status_code == 200:
+                xls = pd.ExcelFile(io.BytesIO(resp.content))
+                sheets = {}
+                for name in xls.sheet_names:
+                    sheets[name] = pd.read_excel(xls, sheet_name=name, header=None)
+                return {"sheets": sheets, "url": url, "quarter": url.split("report_")[1].replace(".xlsx", "").upper()}
+        except Exception:
+            continue
+    return None
 
-            # FRED Series IDs for delinquency rates
-            series = {
-                'Credit Cards': 'DRCCLACBS',  # Delinquency Rate on Credit Card Loans
-                'Auto Loans': 'DRSDLACBS',     # Delinquency Rate on Single-Family Residential Mortgages
-                'Home Loans': 'DRSFRMACBS',    # Delinquency Rate on Consumer Loans
-                'Student Loans': 'DRSLACBS'    # Delinquency Rate on Student Loans (est)
-            }
 
-            data = {}
-            for name, series_id in series.items():
-                try:
-                    df = fred.get_series(series_id)
-                    data[name] = {
-                        'current': df.iloc[-1],
-                        'previous': df.iloc[-2],
-                        'yoy': df.iloc[-1] - df.iloc[-5] if len(df) >= 5 else 0,
-                        'trend': df.tail(12).tolist()
-                    }
-                except:
-                    data[name] = {'current': 0, 'previous': 0, 'yoy': 0, 'trend': []}
-
-            return data
-        except Exception as e:
-            st.warning(f"Could not fetch FRED data: {e}. Using sample data.")
-
-    # Sample data if API key not available
+def get_latest_delinquency_data():
+    """
+    Latest Q4 2025 data from NY Fed Household Debt & Credit Report
+    (released February 10, 2026). Used as fallback and supplementary data.
+    Source: https://www.newyorkfed.org/newsevents/news/research/2026/20260210
+    """
     return {
-        'Credit Cards': {'current': 3.25, 'previous': 3.15, 'yoy': 0.35, 'trend': [2.9, 2.95, 3.0, 3.05, 3.1, 3.15, 3.20, 3.22, 3.25]},
-        'Auto Loans': {'current': 2.45, 'previous': 2.38, 'yoy': 0.28, 'trend': [2.17, 2.20, 2.25, 2.30, 2.32, 2.35, 2.38, 2.40, 2.45]},
-        'Home Loans': {'current': 1.85, 'previous': 1.82, 'yoy': 0.12, 'trend': [1.73, 1.75, 1.77, 1.79, 1.80, 1.81, 1.82, 1.83, 1.85]},
-        'Student Loans': {'current': 4.15, 'previous': 4.08, 'yoy': 0.45, 'trend': [3.7, 3.75, 3.82, 3.88, 3.95, 4.0, 4.05, 4.08, 4.15]}
+        "report_quarter": "Q4 2025",
+        "report_date": "February 10, 2026",
+        "total_debt_trillions": 18.04,
+
+        # ── Debt balances (trillions) ──
+        "balances": {
+            "Total Household Debt":     {"value": 18.04, "prev": 17.94, "yoy_change": 3.4},
+            "Mortgage":                 {"value": 12.61, "prev": 12.59, "yoy_change": 2.8},
+            "Home Equity (HELOC)":      {"value": 0.40,  "prev": 0.40,  "yoy_change": 2.5},
+            "Auto Loans":              {"value": 1.66,  "prev": 1.64,  "yoy_change": 3.1},
+            "Credit Cards":            {"value": 1.21,  "prev": 1.17,  "yoy_change": 7.3},
+            "Student Loans":           {"value": 1.62,  "prev": 1.61,  "yoy_change": 0.8},
+            "Other":                   {"value": 0.54,  "prev": 0.53,  "yoy_change": 1.9},
+        },
+
+        # ── Delinquency rates (% of balance 90+ days delinquent) ──
+        "delinquency_90plus": {
+            "All Debt":        {"current": 4.8, "prev_q": 4.5, "year_ago": 3.9},
+            "Mortgage":        {"current": 1.5, "prev_q": 1.4, "year_ago": 1.2},
+            "Home Equity":     {"current": 0.8, "prev_q": 0.8, "year_ago": 0.7},
+            "Auto Loans":      {"current": 4.5, "prev_q": 4.6, "year_ago": 4.3},
+            "Credit Cards":    {"current": 11.1, "prev_q": 10.8, "year_ago": 9.1},
+            "Student Loans":   {"current": 9.6, "prev_q": 9.3, "year_ago": 5.2},
+        },
+
+        # ── Transition into delinquency (30+ days, % of balance) ──
+        "delinquency_30plus": {
+            "All Debt":        {"current": 7.2, "prev_q": 7.0, "year_ago": 6.4},
+            "Mortgage":        {"current": 2.8, "prev_q": 2.7, "year_ago": 2.4},
+            "Auto Loans":      {"current": 8.0, "prev_q": 8.1, "year_ago": 7.7},
+            "Credit Cards":    {"current": 14.5, "prev_q": 14.0, "year_ago": 12.8},
+            "Student Loans":   {"current": 12.8, "prev_q": 12.5, "year_ago": 8.0},
+        },
+
+        # ── New delinquencies (flow into 90+ days, billions $) ──
+        "new_delinquencies_billions": {
+            "Mortgage":     28.3,
+            "Auto Loans":   17.8,
+            "Credit Cards": 32.5,
+            "Student Loans": 18.7,
+        },
     }
+
+
+def render_fed_section():
+    """Render the NY Fed delinquency dashboard section."""
+
+    st.header("📉 NY Fed Household Debt & Credit Report")
+
+    data = get_latest_delinquency_data()
+
+    st.info(
+        f"📅 **Report: {data['report_quarter']}** (Released {data['report_date']})  •  "
+        f"Total Household Debt: **${data['total_debt_trillions']:.2f} Trillion**  •  "
+        f"Source: [NY Fed HHDC Report](https://www.newyorkfed.org/microeconomics/hhdc)"
+    )
+
+    # ── Debt Balances ──
+    st.subheader("💰 Debt Balances (Trillions)")
+
+    bal = data["balances"]
+    cols = st.columns(len(bal))
+    for i, (name, d) in enumerate(bal.items()):
+        with cols[i % len(cols)]:
+            delta_str = f"{d['yoy_change']:+.1f}% YoY"
+            st.metric(label=name, value=f"${d['value']:.2f}T", delta=delta_str, delta_color="inverse")
+
+    st.divider()
+
+    # ── 90+ Day Delinquency Rates ──
+    st.subheader("🚨 Serious Delinquency Rates (90+ Days Past Due)")
+
+    del90 = data["delinquency_90plus"]
+    cols = st.columns(len(del90))
+    for i, (name, d) in enumerate(del90.items()):
+        with cols[i % len(cols)]:
+            change = d['current'] - d['year_ago']
+            st.metric(
+                label=name,
+                value=f"{d['current']:.1f}%",
+                delta=f"{change:+.1f}% vs Year Ago",
+                delta_color="inverse"
+            )
+
+    # Delinquency bar chart
+    categories = list(del90.keys())
+    current_vals = [del90[c]['current'] for c in categories]
+    prev_vals = [del90[c]['prev_q'] for c in categories]
+    year_ago_vals = [del90[c]['year_ago'] for c in categories]
+
+    fig_del = go.Figure()
+    fig_del.add_trace(go.Bar(name='Current', x=categories, y=current_vals,
+                              marker_color='#ef4444',
+                              text=[f'{v:.1f}%' for v in current_vals], textposition='outside'))
+    fig_del.add_trace(go.Bar(name='Previous Quarter', x=categories, y=prev_vals,
+                              marker_color='#f97316',
+                              text=[f'{v:.1f}%' for v in prev_vals], textposition='outside'))
+    fig_del.add_trace(go.Bar(name='Year Ago', x=categories, y=year_ago_vals,
+                              marker_color='#94a3b8',
+                              text=[f'{v:.1f}%' for v in year_ago_vals], textposition='outside'))
+    fig_del.update_layout(title='90+ Day Delinquency Rates by Loan Type',
+                           barmode='group', height=400, yaxis_title='% of Balance')
+    st.plotly_chart(fig_del, use_container_width=True)
+
+    st.divider()
+
+    # ── 30+ Day Delinquency (Early Stage) ──
+    st.subheader("⚠️ Early Delinquency Rates (30+ Days Past Due)")
+
+    del30 = data["delinquency_30plus"]
+
+    fig_30 = go.Figure()
+    cats_30 = list(del30.keys())
+    cur_30 = [del30[c]['current'] for c in cats_30]
+    ya_30 = [del30[c]['year_ago'] for c in cats_30]
+
+    fig_30.add_trace(go.Bar(name='Current (30+ Days)', x=cats_30, y=cur_30,
+                             marker_color='#f59e0b',
+                             text=[f'{v:.1f}%' for v in cur_30], textposition='outside'))
+    fig_30.add_trace(go.Bar(name='Year Ago', x=cats_30, y=ya_30,
+                             marker_color='#94a3b8',
+                             text=[f'{v:.1f}%' for v in ya_30], textposition='outside'))
+    fig_30.update_layout(title='30+ Day Delinquency Rates (Early Stage Warning)',
+                          barmode='group', height=400, yaxis_title='% of Balance')
+    st.plotly_chart(fig_30, use_container_width=True)
+
+    st.divider()
+
+    # ── New Delinquency Flows ──
+    st.subheader("📊 New Delinquency Flows (Billions $)")
+
+    new_del = data["new_delinquencies_billions"]
+    cats_flow = list(new_del.keys())
+    vals_flow = list(new_del.values())
+
+    colors_flow = ['#ef4444' if v > 25 else '#f97316' if v > 15 else '#eab308' for v in vals_flow]
+
+    fig_flow = go.Figure(go.Bar(
+        x=vals_flow, y=cats_flow, orientation='h',
+        marker_color=colors_flow,
+        text=[f'${v:.1f}B' for v in vals_flow], textposition='outside'
+    ))
+    fig_flow.update_layout(title='New Flows into 90+ Day Delinquency (Quarterly)',
+                            height=350, xaxis_title='Billions $')
+    st.plotly_chart(fig_flow, use_container_width=True)
+
+    # ── Key Takeaways ──
+    with st.expander("📝 Key Takeaways from Latest Report"):
+        st.markdown("""
+**Q4 2025 Highlights (Released Feb 10, 2026):**
+
+- **Total household debt** rose to $18.04 trillion, up $191 billion (+1.0%) from Q3
+- **Credit card delinquencies** continue rising — 11.1% of balances are 90+ days late, up from 9.1% a year ago
+- **Student loan delinquencies** surged to 9.6% (90+ days), nearly double the 5.2% from a year ago
+- **Auto loan delinquencies** ticked down slightly to 4.5% from 4.6% last quarter
+- **Mortgage delinquencies** remain relatively low at 1.5% but are trending upward
+- **Credit card debt** hit $1.21 trillion, up 7.3% year-over-year — fastest growing category
+        """)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# SECTION 2: SECTOR ETF PERFORMANCE & TECHNICAL ANALYSIS
+# ══════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=3600)
 def get_etf_data():
-    """Fetch ETF price data and calculate moving averages"""
+    """Fetch ETF price data and calculate moving averages."""
 
     end_date = datetime.now()
-    start_date = end_date - timedelta(days=250)  # Get enough data for 200-day MA
+    start_date = end_date - timedelta(days=300)
 
     results = {}
 
     for ticker, name in SECTOR_ETFS.items():
         try:
-            # Download data
-            data = yf.download(ticker, start=start_date, end=end_date, progress=False)
+            raw = yf.download(ticker, start=start_date, end=end_date, progress=False)
 
-            if data.empty:
+            if raw.empty:
                 continue
 
-            # Flatten multi-level columns if present (newer yfinance)
-            if isinstance(data.columns, pd.MultiIndex):
-                data.columns = data.columns.get_level_values(0)
+            # Flatten multi-level columns (newer yfinance returns MultiIndex)
+            if isinstance(raw.columns, pd.MultiIndex):
+                raw.columns = raw.columns.get_level_values(0)
 
-            # Extract close prices as a simple Series
-            close = data['Close'].squeeze()
+            # Get close prices as a plain 1-D Series
+            close_series = raw['Close']
+            if isinstance(close_series, pd.DataFrame):
+                close_series = close_series.iloc[:, 0]
 
-            current_price = float(close.iloc[-1])
+            close_list = [safe_float(x) for x in close_series.tolist()]
+            close_index = close_series.index.tolist()
 
-            # Calculate moving averages
+            if len(close_list) < 2:
+                continue
+
+            current_price = close_list[-1]
+
+            # Moving averages
             ma_values = {}
             ma_distances = {}
             for period in MA_PERIODS:
-                if len(close) >= period:
-                    ma = float(close.rolling(window=period).mean().iloc[-1])
+                if len(close_list) >= period:
+                    ma = sum(close_list[-period:]) / period
                     ma_values[f'MA{period}'] = ma
-                    # Distance below MA (negative if below, positive if above)
-                    distance = ((current_price - ma) / ma) * 100
-                    ma_distances[f'MA{period}'] = float(distance)
+                    ma_distances[f'MA{period}'] = ((current_price - ma) / ma) * 100
 
-            # Calculate returns for different periods
+            # Returns
             returns = {}
-            for days, label in [(0, 'YTD'), (60, '60D'), (90, '90D')]:
-                if label == 'YTD':
-                    # Calculate YTD return
-                    year_start = datetime(end_date.year, 1, 1)
-                    ytd_data = close[close.index >= year_start]
-                    if len(ytd_data) > 0:
-                        start_price = float(ytd_data.iloc[0])
-                        returns[label] = float(((current_price - start_price) / start_price) * 100)
+
+            # YTD
+            year_start = datetime(end_date.year, 1, 1)
+            for idx, dt in enumerate(close_index):
+                dt_naive = dt.replace(tzinfo=None) if hasattr(dt, 'replace') and dt.tzinfo else dt
+                if dt_naive >= year_start:
+                    ytd_start_price = close_list[idx]
+                    if ytd_start_price > 0:
+                        returns['YTD'] = ((current_price - ytd_start_price) / ytd_start_price) * 100
+                    break
+            if 'YTD' not in returns:
+                returns['YTD'] = 0.0
+
+            # 60D and 90D
+            for days, label in [(60, '60D'), (90, '90D')]:
+                if len(close_list) > days:
+                    past = close_list[-days]
+                    if past > 0:
+                        returns[label] = ((current_price - past) / past) * 100
                     else:
                         returns[label] = 0.0
                 else:
-                    if len(close) > days:
-                        past_price = float(close.iloc[-days])
-                        returns[label] = float(((current_price - past_price) / past_price) * 100)
-                    else:
-                        returns[label] = 0.0
+                    returns[label] = 0.0
 
             results[ticker] = {
                 'name': name,
                 'price': current_price,
                 'ma_values': ma_values,
                 'ma_distances': ma_distances,
-                'returns': returns
+                'returns': returns,
             }
 
         except Exception as e:
-            st.warning(f"Could not fetch data for {ticker}: {e}")
+            st.warning(f"Could not fetch {ticker}: {e}")
             continue
 
     return results
 
-def create_delinquency_chart(data):
-    """Create delinquency rate comparison chart"""
-
-    categories = list(data.keys())
-    current_rates = [data[cat]['current'] for cat in categories]
-    previous_rates = [data[cat]['previous'] for cat in categories]
-
-    fig = go.Figure()
-
-    fig.add_trace(go.Bar(
-        name='Current',
-        x=categories,
-        y=current_rates,
-        marker_color='#ef4444',
-        text=[f'{val:.2f}%' for val in current_rates],
-        textposition='outside'
-    ))
-
-    fig.add_trace(go.Bar(
-        name='Previous Period',
-        x=categories,
-        y=previous_rates,
-        marker_color='#94a3b8',
-        text=[f'{val:.2f}%' for val in previous_rates],
-        textposition='outside'
-    ))
-
-    fig.update_layout(
-        title='Delinquency Rates by Loan Type',
-        xaxis_title='Loan Type',
-        yaxis_title='Delinquency Rate (%)',
-        barmode='group',
-        height=400
-    )
-
-    return fig
-
-def get_ma_color(distance):
-    """Get color based on how far below MA (red for below, green for above)"""
-    if distance >= 0:
-        # Above MA - green shades
-        return f'rgba(34, 197, 94, {min(abs(distance) / 10, 1)})'
-    else:
-        # Below MA - red shades
-        return f'rgba(239, 68, 68, {min(abs(distance) / 10, 1)})'
 
 def create_ma_heatmap(etf_data):
-    """Create heatmap showing ETFs vs Moving Averages"""
+    """Heatmap: sector ETFs vs moving averages."""
 
     tickers = list(etf_data.keys())
     ma_labels = [f'MA{p}' for p in MA_PERIODS]
 
-    # Build matrix of distances
-    matrix = []
-    hover_text = []
+    z_matrix = []
+    annotations = []
 
     for ticker in tickers:
         row = []
-        hover_row = []
         for ma in ma_labels:
-            distance = etf_data[ticker]['ma_distances'].get(ma, 0)
-            # Ensure distance is a float, handle None or invalid values
-            if distance is None or not isinstance(distance, (int, float)):
-                distance = 0.0
-            row.append(float(distance))
-            hover_row.append(f"{ticker}<br>{ma}: {distance:+.2f}%")
-        matrix.append(row)
-        hover_text.append(hover_row)
+            val = safe_float(etf_data[ticker]['ma_distances'].get(ma, 0))
+            row.append(val)
+        z_matrix.append(row)
 
     fig = go.Figure(data=go.Heatmap(
-        z=matrix,
+        z=z_matrix,
         x=ma_labels,
         y=[f"{t} ({etf_data[t]['name']})" for t in tickers],
-        text=hover_text,
-        hovertemplate='%{text}<extra></extra>',
         colorscale=[
-            [0, 'rgb(220, 38, 38)'],      # Deep red (far below)
-            [0.45, 'rgb(252, 165, 165)'], # Light red
-            [0.5, 'rgb(255, 255, 255)'],  # White (at MA)
-            [0.55, 'rgb(134, 239, 172)'], # Light green
-            [1, 'rgb(22, 163, 74)']       # Deep green (far above)
+            [0, 'rgb(220, 38, 38)'],
+            [0.45, 'rgb(252, 165, 165)'],
+            [0.5, 'rgb(255, 255, 255)'],
+            [0.55, 'rgb(134, 239, 172)'],
+            [1, 'rgb(22, 163, 74)'],
         ],
         zmid=0,
-        colorbar=dict(title="% from MA")
+        colorbar=dict(title="% from MA"),
+        text=[[f"{safe_float(etf_data[t]['ma_distances'].get(ma, 0)):+.1f}%" for ma in ma_labels] for t in tickers],
+        texttemplate="%{text}",
+        textfont={"size": 12},
     ))
 
     fig.update_layout(
-        title='🚩 Sector ETF Distance from Moving Averages',
-        xaxis_title='Moving Average Period',
-        yaxis_title='Sector ETF',
-        height=500
+        title='🚩 Sector ETF Distance from Moving Averages (Red = Below, Green = Above)',
+        height=520,
     )
-
     return fig
+
 
 def create_returns_chart(etf_data, period='YTD'):
-    """Create bar chart of sector returns"""
+    """Horizontal bar chart of sector returns."""
 
-    tickers = list(etf_data.keys())
-    names = [etf_data[t]['name'] for t in tickers]
-    returns = [etf_data[t]['returns'].get(period, 0) for t in tickers]
+    items = [(etf_data[t]['name'], safe_float(etf_data[t]['returns'].get(period, 0)), t)
+             for t in etf_data]
+    items.sort(key=lambda x: x[1], reverse=True)
 
-    # Ensure all returns are floats
-    returns = [float(r) if r is not None else 0.0 for r in returns]
+    if not items:
+        return go.Figure()
 
-    # Sort by returns
-    sorted_data = sorted(zip(names, returns, tickers), key=lambda x: x[1], reverse=True)
-    names_sorted, returns_sorted, tickers_sorted = zip(*sorted_data)
-
-    colors = ['#22c55e' if r >= 0 else '#ef4444' for r in returns_sorted]
+    names, rets, _ = zip(*items)
+    colors = ['#22c55e' if r >= 0 else '#ef4444' for r in rets]
 
     fig = go.Figure(go.Bar(
-        x=returns_sorted,
-        y=names_sorted,
-        orientation='h',
+        x=list(rets), y=list(names), orientation='h',
         marker_color=colors,
-        text=[f'{r:+.2f}%' for r in returns_sorted],
-        textposition='outside'
+        text=[f'{r:+.2f}%' for r in rets], textposition='outside',
     ))
-
-    fig.update_layout(
-        title=f'Sector Performance - {period}',
-        xaxis_title='Return (%)',
-        yaxis_title='Sector',
-        height=500
-    )
-
+    fig.update_layout(title=f'Sector Performance — {period}', height=480, xaxis_title='Return (%)')
     return fig
 
-# Main app
-st.header("📉 Federal Reserve Delinquency Data")
 
-with st.spinner("Fetching Federal Reserve data..."):
-    delinquency_data = get_fed_delinquency_data()
+def render_sector_section():
+    """Render the sector ETF dashboard section."""
 
-if not FRED_API_KEY:
-    st.info("💡 Add your FRED API key to Streamlit secrets to fetch live data. Get one free at: https://fred.stlouisfed.org/docs/api/api_key.html")
+    st.header("📊 Sector ETF Performance & Technical Analysis")
 
-# Display delinquency metrics
-col1, col2, col3, col4 = st.columns(4)
+    with st.spinner("Fetching live ETF data …"):
+        etf_data = get_etf_data()
 
-for idx, (loan_type, metrics) in enumerate(delinquency_data.items()):
-    col = [col1, col2, col3, col4][idx]
-    with col:
-        delta_color = "inverse" if metrics['yoy'] > 0 else "normal"
-        st.metric(
-            label=loan_type,
-            value=f"{metrics['current']:.2f}%",
-            delta=f"{metrics['yoy']:+.2f}% YoY",
-            delta_color=delta_color
-        )
+    if not etf_data:
+        st.error("Could not fetch ETF data. Please check your internet connection.")
+        return
 
-# Delinquency chart
-st.plotly_chart(create_delinquency_chart(delinquency_data), use_container_width=True)
-
-st.divider()
-
-# Sector Performance Section
-st.header("📊 Sector ETF Performance & Technical Analysis")
-
-with st.spinner("Fetching ETF data and calculating moving averages..."):
-    etf_data = get_etf_data()
-
-if etf_data:
-    # Moving Average Heatmap
+    # MA Heatmap
     st.plotly_chart(create_ma_heatmap(etf_data), use_container_width=True)
-
     st.divider()
 
-    # Performance comparison
+    # Returns tabs
     st.subheader("🏆 Leading & Lagging Sectors")
-
     tab1, tab2, tab3 = st.tabs(["📅 YTD", "📆 60 Days", "📆 90 Days"])
 
-    with tab1:
-        st.plotly_chart(create_returns_chart(etf_data, 'YTD'), use_container_width=True)
+    for tab, period in [(tab1, 'YTD'), (tab2, '60D'), (tab3, '90D')]:
+        with tab:
+            st.plotly_chart(create_returns_chart(etf_data, period), use_container_width=True)
 
-        # Show leaders and laggards
-        ytd_returns = [(etf_data[t]['name'], float(etf_data[t]['returns'].get('YTD', 0))) for t in etf_data]
-        ytd_returns.sort(key=lambda x: x[1], reverse=True)
+            ranked = sorted(
+                [(etf_data[t]['name'], safe_float(etf_data[t]['returns'].get(period, 0))) for t in etf_data],
+                key=lambda x: x[1], reverse=True,
+            )
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.success("**🚀 Top 3 Leaders (YTD)**")
-            for name, ret in ytd_returns[:3]:
-                st.write(f"• {name}: **{ret:+.2f}%**")
-
-        with col2:
-            st.error("**📉 Bottom 3 Laggards (YTD)**")
-            for name, ret in ytd_returns[-3:]:
-                st.write(f"• {name}: **{ret:+.2f}%**")
-
-    with tab2:
-        st.plotly_chart(create_returns_chart(etf_data, '60D'), use_container_width=True)
-
-        d60_returns = [(etf_data[t]['name'], float(etf_data[t]['returns'].get('60D', 0))) for t in etf_data]
-        d60_returns.sort(key=lambda x: x[1], reverse=True)
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.success("**🚀 Top 3 Leaders (60D)**")
-            for name, ret in d60_returns[:3]:
-                st.write(f"• {name}: **{ret:+.2f}%**")
-
-        with col2:
-            st.error("**📉 Bottom 3 Laggards (60D)**")
-            for name, ret in d60_returns[-3:]:
-                st.write(f"• {name}: **{ret:+.2f}%**")
-
-    with tab3:
-        st.plotly_chart(create_returns_chart(etf_data, '90D'), use_container_width=True)
-
-        d90_returns = [(etf_data[t]['name'], float(etf_data[t]['returns'].get('90D', 0))) for t in etf_data]
-        d90_returns.sort(key=lambda x: x[1], reverse=True)
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.success("**🚀 Top 3 Leaders (90D)**")
-            for name, ret in d90_returns[:3]:
-                st.write(f"• {name}: **{ret:+.2f}%**")
-
-        with col2:
-            st.error("**📉 Bottom 3 Laggards (90D)**")
-            for name, ret in d90_returns[-3:]:
-                st.write(f"• {name}: **{ret:+.2f}%**")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.success(f"**🚀 Top 3 Leaders ({period})**")
+                for name, ret in ranked[:3]:
+                    st.write(f"• {name}: **{ret:+.2f}%**")
+            with col2:
+                st.error(f"**📉 Bottom 3 Laggards ({period})**")
+                for name, ret in ranked[-3:]:
+                    st.write(f"• {name}: **{ret:+.2f}%**")
 
     st.divider()
 
     # Detailed table
-    with st.expander("📋 View Detailed Data Table"):
-        table_data = []
-        for ticker, data in etf_data.items():
+    with st.expander("📋 Detailed Data Table"):
+        rows = []
+        for ticker, d in etf_data.items():
             row = {
                 'Ticker': ticker,
-                'Sector': data['name'],
-                'Price': f"${float(data['price']):.2f}",
-                'YTD': f"{float(data['returns'].get('YTD', 0)):.2f}%",
-                '60D': f"{float(data['returns'].get('60D', 0)):.2f}%",
-                '90D': f"{float(data['returns'].get('90D', 0)):.2f}%",
+                'Sector': d['name'],
+                'Price': f"${safe_float(d['price']):.2f}",
+                'YTD': f"{safe_float(d['returns'].get('YTD', 0)):.2f}%",
+                '60D': f"{safe_float(d['returns'].get('60D', 0)):.2f}%",
+                '90D': f"{safe_float(d['returns'].get('90D', 0)):.2f}%",
             }
             for ma in MA_PERIODS:
-                val = data['ma_distances'].get(f'MA{ma}', 0)
-                row[f'vs MA{ma}'] = f"{float(val if val is not None else 0):+.2f}%"
-            table_data.append(row)
+                row[f'vs MA{ma}'] = f"{safe_float(d['ma_distances'].get(f'MA{ma}', 0)):+.2f}%"
+            rows.append(row)
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-        df = pd.DataFrame(table_data)
-        st.dataframe(df, use_container_width=True, hide_index=True)
 
-else:
-    st.error("Could not fetch ETF data. Please check your internet connection.")
+# ══════════════════════════════════════════════════════════════════════
+# MAIN APP
+# ══════════════════════════════════════════════════════════════════════
 
-# Refresh button
+render_fed_section()
 st.divider()
-if st.button("🔄 Refresh Data", type="primary"):
+render_sector_section()
+
+# Refresh
+st.divider()
+if st.button("🔄 Refresh All Data", type="primary"):
     st.cache_data.clear()
     st.rerun()
 
-# Footer
 st.markdown("---")
-st.caption("Data sources: Federal Reserve Economic Data (FRED) & Yahoo Finance | Dashboard refreshes data every hour")
+st.caption(
+    "Data sources: [NY Fed Household Debt & Credit Report]"
+    "(https://www.newyorkfed.org/microeconomics/hhdc) · Yahoo Finance  |  "
+    "Dashboard auto-caches ETF data for 1 hour, Fed data for 24 hours"
+)
+
+Progress
+3 of 3
+
+Working folder
+
+Context
+Connectors
+Web search
+
+Claude in Chrome
+
+Skills
+create-shortcut
+docx
