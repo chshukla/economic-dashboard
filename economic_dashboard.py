@@ -94,18 +94,25 @@ def get_etf_data():
             if data.empty:
                 continue
 
-            current_price = data['Close'].iloc[-1]
+            # Flatten multi-level columns if present (newer yfinance)
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.get_level_values(0)
+
+            # Extract close prices as a simple Series
+            close = data['Close'].squeeze()
+
+            current_price = float(close.iloc[-1])
 
             # Calculate moving averages
             ma_values = {}
             ma_distances = {}
             for period in MA_PERIODS:
-                if len(data) >= period:
-                    ma = data['Close'].rolling(window=period).mean().iloc[-1]
+                if len(close) >= period:
+                    ma = float(close.rolling(window=period).mean().iloc[-1])
                     ma_values[f'MA{period}'] = ma
                     # Distance below MA (negative if below, positive if above)
                     distance = ((current_price - ma) / ma) * 100
-                    ma_distances[f'MA{period}'] = distance
+                    ma_distances[f'MA{period}'] = float(distance)
 
             # Calculate returns for different periods
             returns = {}
@@ -113,17 +120,18 @@ def get_etf_data():
                 if label == 'YTD':
                     # Calculate YTD return
                     year_start = datetime(end_date.year, 1, 1)
-                    ytd_data = data[data.index >= year_start]
+                    ytd_data = close[close.index >= year_start]
                     if len(ytd_data) > 0:
-                        returns[label] = ((current_price - ytd_data['Close'].iloc[0]) / ytd_data['Close'].iloc[0]) * 100
+                        start_price = float(ytd_data.iloc[0])
+                        returns[label] = float(((current_price - start_price) / start_price) * 100)
                     else:
-                        returns[label] = 0
+                        returns[label] = 0.0
                 else:
-                    if len(data) > days:
-                        past_price = data['Close'].iloc[-days]
-                        returns[label] = ((current_price - past_price) / past_price) * 100
+                    if len(close) > days:
+                        past_price = float(close.iloc[-days])
+                        returns[label] = float(((current_price - past_price) / past_price) * 100)
                     else:
-                        returns[label] = 0
+                        returns[label] = 0.0
 
             results[ticker] = {
                 'name': name,
@@ -399,3 +407,19 @@ if st.button("🔄 Refresh Data", type="primary"):
 st.markdown("---")
 st.caption("Data sources: Federal Reserve Economic Data (FRED) & Yahoo Finance | Dashboard refreshes data every hour")
 
+Progress
+Create Streamlit dashboard script with Fed delinquency data and sector analysis
+Create requirements.txt file for dependencies
+Provide deployment instructions for Streamlit Cloud
+
+Working folder
+
+Context
+Connectors
+Web search
+
+Claude in Chrome
+
+Skills
+create-shortcut
+docx
