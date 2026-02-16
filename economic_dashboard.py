@@ -325,53 +325,53 @@ if etf_data:
         st.plotly_chart(create_returns_chart(etf_data, 'YTD'), use_container_width=True)
 
         # Show leaders and laggards
-        ytd_returns = [(etf_data[t]['name'], etf_data[t]['returns']['YTD']) for t in etf_data]
+        ytd_returns = [(etf_data[t]['name'], float(etf_data[t]['returns'].get('YTD', 0))) for t in etf_data]
         ytd_returns.sort(key=lambda x: x[1], reverse=True)
 
         col1, col2 = st.columns(2)
         with col1:
             st.success("**🚀 Top 3 Leaders (YTD)**")
             for name, ret in ytd_returns[:3]:
-                st.write(f"• {name}: **+{ret:.2f}%**")
+                st.write(f"• {name}: **{ret:+.2f}%**")
 
         with col2:
             st.error("**📉 Bottom 3 Laggards (YTD)**")
             for name, ret in ytd_returns[-3:]:
-                st.write(f"• {name}: **{ret:.2f}%**")
+                st.write(f"• {name}: **{ret:+.2f}%**")
 
     with tab2:
         st.plotly_chart(create_returns_chart(etf_data, '60D'), use_container_width=True)
 
-        d60_returns = [(etf_data[t]['name'], etf_data[t]['returns']['60D']) for t in etf_data]
+        d60_returns = [(etf_data[t]['name'], float(etf_data[t]['returns'].get('60D', 0))) for t in etf_data]
         d60_returns.sort(key=lambda x: x[1], reverse=True)
 
         col1, col2 = st.columns(2)
         with col1:
             st.success("**🚀 Top 3 Leaders (60D)**")
             for name, ret in d60_returns[:3]:
-                st.write(f"• {name}: **+{ret:.2f}%**")
+                st.write(f"• {name}: **{ret:+.2f}%**")
 
         with col2:
             st.error("**📉 Bottom 3 Laggards (60D)**")
             for name, ret in d60_returns[-3:]:
-                st.write(f"• {name}: **{ret:.2f}%**")
+                st.write(f"• {name}: **{ret:+.2f}%**")
 
     with tab3:
         st.plotly_chart(create_returns_chart(etf_data, '90D'), use_container_width=True)
 
-        d90_returns = [(etf_data[t]['name'], etf_data[t]['returns']['90D']) for t in etf_data]
+        d90_returns = [(etf_data[t]['name'], float(etf_data[t]['returns'].get('90D', 0))) for t in etf_data]
         d90_returns.sort(key=lambda x: x[1], reverse=True)
 
         col1, col2 = st.columns(2)
         with col1:
             st.success("**🚀 Top 3 Leaders (90D)**")
             for name, ret in d90_returns[:3]:
-                st.write(f"• {name}: **+{ret:.2f}%**")
+                st.write(f"• {name}: **{ret:+.2f}%**")
 
         with col2:
             st.error("**📉 Bottom 3 Laggards (90D)**")
             for name, ret in d90_returns[-3:]:
-                st.write(f"• {name}: **{ret:.2f}%**")
+                st.write(f"• {name}: **{ret:+.2f}%**")
 
     st.divider()
 
@@ -382,13 +382,14 @@ if etf_data:
             row = {
                 'Ticker': ticker,
                 'Sector': data['name'],
-                'Price': f"${data['price']:.2f}",
-                'YTD': f"{data['returns']['YTD']:.2f}%",
-                '60D': f"{data['returns']['60D']:.2f}%",
-                '90D': f"{data['returns']['90D']:.2f}%",
+                'Price': f"${float(data['price']):.2f}",
+                'YTD': f"{float(data['returns'].get('YTD', 0)):.2f}%",
+                '60D': f"{float(data['returns'].get('60D', 0)):.2f}%",
+                '90D': f"{float(data['returns'].get('90D', 0)):.2f}%",
             }
             for ma in MA_PERIODS:
-                row[f'vs MA{ma}'] = f"{data['ma_distances'].get(f'MA{ma}', 0):+.2f}%"
+                val = data['ma_distances'].get(f'MA{ma}', 0)
+                row[f'vs MA{ma}'] = f"{float(val if val is not None else 0):+.2f}%"
             table_data.append(row)
 
         df = pd.DataFrame(table_data)
@@ -406,20 +407,3 @@ if st.button("🔄 Refresh Data", type="primary"):
 # Footer
 st.markdown("---")
 st.caption("Data sources: Federal Reserve Economic Data (FRED) & Yahoo Finance | Dashboard refreshes data every hour")
-
-Progress
-Create Streamlit dashboard script with Fed delinquency data and sector analysis
-Create requirements.txt file for dependencies
-Provide deployment instructions for Streamlit Cloud
-
-Working folder
-
-Context
-Connectors
-Web search
-
-Claude in Chrome
-
-Skills
-create-shortcut
-docx
