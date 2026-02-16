@@ -470,17 +470,3 @@ st.caption(
     "Dashboard auto-caches ETF data for 1 hour, Fed data for 24 hours"
 )
 
-Progress
-3 of 3
-
-Working folder
-
-Context
-Connectors
-Web search
-
-Claude in Chrome
-
-Skills
-create-shortcut
-docx
