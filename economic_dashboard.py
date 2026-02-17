@@ -368,7 +368,7 @@ def render_sector_section():
                 c1, c2 = st.columns(2)
                 with c1:
                     st.success(f"**Top 3 Leaders ({period})**")
-                    for n, r in items[:3]:
+                    for n, r, _ in items[:3]:
                         st.write(f"- {n}: **{r:+.2f}%**")
                 with c2:
                     st.error(f"**Bottom 3 Laggards ({period})**")
