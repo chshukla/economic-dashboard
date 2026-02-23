@@ -484,8 +484,16 @@ def run_ma_crossover_backtest(weekly_df):
                         fwd[label] = ((fwd_price - entry_price) / entry_price) * 100
                     else:
                         fwd[label] = 0.0
+            # Maximum Drawdown: worst trough within 1Y forward window (52 weeks)
+            max_dd = 0.0
+            if entry_price > 0:
+                end_idx = min(i + 52, len(df))
+                fwd_prices = [safe_float(df["close"].iloc[j]) for j in range(i, end_idx)]
+                if fwd_prices:
+                    min_price = min(fwd_prices)
+                    max_dd = ((min_price - entry_price) / entry_price) * 100
             if fwd:
-                signals.append({"date": entry_date, "price": entry_price, **fwd})
+                signals.append({"date": entry_date, "price": entry_price, **fwd, "Max Drawdown (%)": max_dd})
     return signals
 
 
@@ -496,7 +504,6 @@ def run_below_200ma_backtest(daily_df):
     df["ma200"] = df["close"].rolling(200).mean()
     df = df.dropna().reset_index(drop=True)
     signals = []
-    below = False
     for i in range(1, len(df)):
         was_above = df["close"].iloc[i-1] >= df["ma200"].iloc[i-1]
         now_below = df["close"].iloc[i] < df["ma200"].iloc[i]
@@ -512,8 +519,16 @@ def run_below_200ma_backtest(daily_df):
                         fwd[label] = ((fwd_price - entry_price) / entry_price) * 100
                     else:
                         fwd[label] = 0.0
+            # Maximum Drawdown: worst trough within 1Y forward window (365 days)
+            max_dd = 0.0
+            if entry_price > 0:
+                end_idx = min(i + 365, len(df))
+                fwd_prices = [safe_float(df["close"].iloc[j]) for j in range(i, end_idx)]
+                if fwd_prices:
+                    min_price = min(fwd_prices)
+                    max_dd = ((min_price - entry_price) / entry_price) * 100
             if fwd:
-                signals.append({"date": entry_date, "price": entry_price, **fwd})
+                signals.append({"date": entry_date, "price": entry_price, **fwd, "Max Drawdown (%)": max_dd})
     return signals
 
 
@@ -544,13 +559,25 @@ def render_backtest_section():
                 avg_row = {p: safe_float(df_sig[p].mean()) for p in avail}
                 med_row = {p: safe_float(df_sig[p].median()) for p in avail}
                 win_row = {p: safe_float((df_sig[p] > 0).mean() * 100) for p in avail}
+                avg_dd = safe_float(df_sig["Max Drawdown (%)"].mean()) if "Max Drawdown (%)" in df_sig.columns else 0.0
+                med_dd = safe_float(df_sig["Max Drawdown (%)"].median()) if "Max Drawdown (%)" in df_sig.columns else 0.0
+                worst_dd = safe_float(df_sig["Max Drawdown (%)"].min()) if "Max Drawdown (%)" in df_sig.columns else 0.0
 
                 summary = pd.DataFrame([
-                    {"Metric": "Avg Return (%)", **{p: f"{avg_row[p]:+.2f}" for p in avail}},
-                    {"Metric": "Median Return (%)", **{p: f"{med_row[p]:+.2f}" for p in avail}},
-                    {"Metric": "Win Rate (%)", **{p: f"{win_row[p]:.0f}%" for p in avail}},
+                    {"Metric": "Avg Return (%)", **{p: f"{avg_row[p]:+.2f}" for p in avail}, "Max Drawdown (%)": f"{avg_dd:.2f}"},
+                    {"Metric": "Median Return (%)", **{p: f"{med_row[p]:+.2f}" for p in avail}, "Max Drawdown (%)": f"{med_dd:.2f}"},
+                    {"Metric": "Win Rate (%)", **{p: f"{win_row[p]:.0f}%" for p in avail}, "Max Drawdown (%)": f"Worst: {worst_dd:.2f}%"},
                 ])
                 st.dataframe(summary, use_container_width=True, hide_index=True)
+
+                # Max Drawdown metric
+                col_dd1, col_dd2, col_dd3 = st.columns(3)
+                with col_dd1:
+                    st.metric("Avg Max Drawdown", f"{avg_dd:.2f}%", delta=None)
+                with col_dd2:
+                    st.metric("Median Max Drawdown", f"{med_dd:.2f}%", delta=None)
+                with col_dd3:
+                    st.metric("Worst Drawdown Seen", f"{worst_dd:.2f}%", delta=None)
 
                 fig = go.Figure()
                 fig.add_trace(go.Bar(name='Avg Return', x=avail, y=[avg_row[p] for p in avail],
@@ -561,7 +588,7 @@ def render_backtest_section():
                 st.plotly_chart(fig, use_container_width=True)
 
                 with st.expander("View All Signals"):
-                    display_cols = ["date", "price"] + avail
+                    display_cols = ["date", "price"] + avail + (["Max Drawdown (%)"] if "Max Drawdown (%)" in df_sig.columns else [])
                     st.dataframe(df_sig[display_cols].round(2), use_container_width=True, hide_index=True)
         else:
             st.info(f"No crossover signals found for {selected} in the past 10 years.")
@@ -588,13 +615,25 @@ def render_backtest_section():
                 avg2 = {p: safe_float(df_sig2[p].mean()) for p in avail2}
                 med2 = {p: safe_float(df_sig2[p].median()) for p in avail2}
                 win2 = {p: safe_float((df_sig2[p] > 0).mean() * 100) for p in avail2}
+                avg_dd2 = safe_float(df_sig2["Max Drawdown (%)"].mean()) if "Max Drawdown (%)" in df_sig2.columns else 0.0
+                med_dd2 = safe_float(df_sig2["Max Drawdown (%)"].median()) if "Max Drawdown (%)" in df_sig2.columns else 0.0
+                worst_dd2 = safe_float(df_sig2["Max Drawdown (%)"].min()) if "Max Drawdown (%)" in df_sig2.columns else 0.0
 
                 summary2 = pd.DataFrame([
-                    {"Metric": "Avg Return (%)", **{p: f"{avg2[p]:+.2f}" for p in avail2}},
-                    {"Metric": "Median Return (%)", **{p: f"{med2[p]:+.2f}" for p in avail2}},
-                    {"Metric": "Win Rate (%)", **{p: f"{win2[p]:.0f}%" for p in avail2}},
+                    {"Metric": "Avg Return (%)", **{p: f"{avg2[p]:+.2f}" for p in avail2}, "Max Drawdown (%)": f"{avg_dd2:.2f}"},
+                    {"Metric": "Median Return (%)", **{p: f"{med2[p]:+.2f}" for p in avail2}, "Max Drawdown (%)": f"{med_dd2:.2f}"},
+                    {"Metric": "Win Rate (%)", **{p: f"{win2[p]:.0f}%" for p in avail2}, "Max Drawdown (%)": f"Worst: {worst_dd2:.2f}%"},
                 ])
                 st.dataframe(summary2, use_container_width=True, hide_index=True)
+
+                # Max Drawdown metric
+                col_dd4, col_dd5, col_dd6 = st.columns(3)
+                with col_dd4:
+                    st.metric("Avg Max Drawdown", f"{avg_dd2:.2f}%", delta=None)
+                with col_dd5:
+                    st.metric("Median Max Drawdown", f"{med_dd2:.2f}%", delta=None)
+                with col_dd6:
+                    st.metric("Worst Drawdown Seen", f"{worst_dd2:.2f}%", delta=None)
 
                 fig2 = go.Figure()
                 fig2.add_trace(go.Bar(name='Avg Return', x=avail2, y=[avg2[p] for p in avail2],
@@ -605,7 +644,7 @@ def render_backtest_section():
                 st.plotly_chart(fig2, use_container_width=True)
 
                 with st.expander("View All Signals"):
-                    display_cols2 = ["date", "price"] + avail2
+                    display_cols2 = ["date", "price"] + avail2 + (["Max Drawdown (%)"] if "Max Drawdown (%)" in df_sig2.columns else [])
                     st.dataframe(df_sig2[display_cols2].round(2), use_container_width=True, hide_index=True)
         else:
             st.info(f"Not enough data for {selected2} (need ~2 years of daily data).")
